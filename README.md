@@ -63,13 +63,12 @@ model = nn.DataParallel(model, device_ids=args.gpu_ids, output_device=args.gpu_i
 基本使用：
 
 ```python
-# 第零步：需要定义两个参数
+# 第零步：需要定义一个参数
 import argparse
 parser = argparse.ArgumentParser()
 # ========================================
 # 这个必须被预先定义
 parser.add_argument("--local-rank", type=int, default=0)
-parser.add_argument("--local_world_size", type=int, default=1)
 # 第一步：初始化
 dist.init_process_group(backend="nccl")
 # ========================================
