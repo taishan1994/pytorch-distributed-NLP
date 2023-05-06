@@ -124,7 +124,7 @@ class Trainer:
         return optimizer
 
     def on_step(self, batch_data):
-        # 第七步：根据local_rank将数据分发给指定的GPU
+        # 第六步：根据local_rank将数据分发给指定的GPU
         label = batch_data["label"].cuda(self.args.rank)
         input_ids = batch_data["input_ids"].cuda(self.args.rank)
         token_type_ids = batch_data["token_type_ids"].cuda(self.args.rank)
@@ -165,20 +165,20 @@ class Trainer:
                 logits, label = self.on_step(batch_data)
                 # 实际上这里计算的loss和output[0]是一样的
                 loss = self.criterion(logits, label)
-                # 第六步：等待所有GPU
+                # 第五步：等待所有GPU
                 torch.distributed.barrier()
                 self.optimizer.zero_grad()
                 loss.backward()
                 self.optimizer.step()
-                # 第八步：reduce计算损失
+                # 第七步：reduce计算损失
                 loss = self.loss_reduce(loss)
-                # 第九步：在主rank打印指标
+                # 第八步：在主rank打印指标
                 if self.args.local_rank == 0:
                     print("【train】 epoch：{}/{} step：{}/{} loss：{:.6f}".format(
                         epoch, self.args.epochs, gloabl_step, self.args.total_step, loss
                     ))
                 gloabl_step += 1
-                # 第十步：在主rank保存模型
+                # 第九步：在主rank保存模型
                 if gloabl_step % self.args.eval_step == 0:
                     loss, accuracy = self.dev(dev_loader)
                     if self.args.local_rank == 0:
@@ -200,7 +200,7 @@ class Trainer:
                 torch.distributed.barrier()
                 loss = self.loss_reduce(loss)
                 loss_total += loss
-                # 第十一步：reduce得到结果
+                # 第十步：reduce得到结果
                 logits, label = self.output_reduce(logits, label)
                 logits = logits.detach().cpu().numpy()
                 label = label.view(-1).detach().cpu().numpy()
@@ -326,7 +326,7 @@ def main(local_world_size, local_rank):
     report = trainer.test(model, test_loader, labels)
     if self.args.local_rank == 0:
         print(report)
-
+    # 第十一步
     dist.destroy_process_group()
 
 
