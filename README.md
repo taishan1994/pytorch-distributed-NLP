@@ -9,7 +9,7 @@ pytorch单机多卡分布式训练-中文文本分类。一直想尝试来着，
 
 运行：```python single-gpu-cls.py```
 
-![image-20230506162110739](C:\Users\Administrator\Desktop\github\pytorch-distributed\README.assets\image-20230506162110739.png)
+![image-20230506162110739](README.assets/image-20230506162110739.png)
 
 ```python
 【train】 epoch：1/1 step：1/288 loss：1.817216
@@ -36,7 +36,7 @@ model = nn.DataParallel(model, device_ids=args.gpu_ids, output_device=args.gpu_i
 
 运行：```python multi-gpu-dataparrel-cls.py```
 
-![image-20230506162006099](C:\Users\Administrator\Desktop\github\pytorch-distributed\README.assets\image-20230506162006099.png)
+![image-20230506162006099](README.assets/image-20230506162006099.png)
 
 ```pythn
 【train】 epoch：1/1 step：1/288 loss：1.848520
@@ -169,7 +169,7 @@ python -m torch.distributed.launch --nnode=1 --node_rank=0 --nproc_per_node=2 --
 python -m torch.distributed.launch --nnode=1 --node_rank=0 --nproc_per_node=2 multi-gpu-distributed-cls.py --local_world_size=2
 ```
 
-![image-20230506165535656](C:\Users\Administrator\Desktop\github\pytorch-distributed\README.assets\image-20230506165535656.png)
+![image-20230506165535656](README.assets/image-20230506165535656.png)
 
 ```python
 [5574] Initializing process group with: {'MASTER_ADDR': '127.0.0.1', 'MASTER_PORT': '29500', 'RANK': '0', 'WORLD_SIZE': '2', 'LOCAL_RANK': '0'}
