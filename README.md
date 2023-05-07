@@ -217,7 +217,9 @@ model.load_state_dict(torch.load(args.ckpt_path))
 # 参考
 
 > [PyTorch分布式训练简明教程(2022更新版) - 知乎 (zhihu.com)](https://zhuanlan.zhihu.com/p/113694038)
-
+>
 > [tczhangzhi/pytorch-distributed: A quickstart and benchmark for pytorch distributed training. (github.com)](https://github.com/tczhangzhi/pytorch-distributed)
 >
 > [Pytorch 分布式训练的坑（use_env, loacl_rank) - 知乎 (zhihu.com)](https://zhuanlan.zhihu.com/p/501632575)
+>
+> https://pytorch.org/docs/stable/elastic/run.html
