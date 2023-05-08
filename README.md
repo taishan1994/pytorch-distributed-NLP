@@ -7,14 +7,15 @@ pytorch单机多卡分布式训练-中文文本分类。一直想尝试来着，
 
 # 对比
 
-| 方法                         | 耗时(分钟)             |
-| ---------------------------- | ---------------------- |
-| 单GPU                        | 2.8276                 |
-| dataparallel                 | 2.0301                 |
-| distributed                  | 1.4120                 |
-| distributed-multiprocess     | 1.4921                 |
-| distributed-multiprocess-amp | 0.6336                 |
-| horovod                      | 5.1228（存在一些问题） |
+| 方法                         | 耗时(分钟)                           |
+| ---------------------------- | ------------------------------------ |
+| 单GPU                        | 2.8276                               |
+| dataparallel                 | 2.0301                               |
+| distributed                  | 1.4120                               |
+| distributed-multiprocess     | 1.4921                               |
+| distributed-multiprocess-amp | 0.6336                               |
+| horovod                      | 5.1228（存在一些问题）               |
+| deepspeed                    | 1.0114（训练速度快，但效果没其他好） |
 
 
 
@@ -363,6 +364,86 @@ hvd.broadcast_optimizer_state(optimizer, root_rank=0)
 - 训练时长较长。
 - 模型并没有被有效的训练。
 
+# deepspeed分布式训练
+
+```python
+pip install deepspeed
+sudo apt-get update
+sudo apt-get install openmpi-bin libopenmpi-dev
+pip install mpi4py
+```
+
+![image-20230508171612641](C:\Users\Administrator\Desktop\github\pytorch-distributed\README.assets\image-20230508171612641.png)
+
+```python
+【train】 epoch：1/1 step：1/288 loss：1.817383
+【train】 epoch：1/1 step：2/288 loss：1.851562
+【train】 epoch：1/1 step：3/288 loss：1.679688
+【train】 epoch：1/1 step：4/288 loss：1.725586
+【train】 epoch：1/1 step：5/288 loss：1.826172
+```
+
+如果报错：
+
+- ModuleNotFoundError: No module named 'torch._six：找到报错的文件，
+
+```python
+注释掉：from torch._six import string_classes
+加入：
+int_classes = int
+string_classes = str
+如果还报错：NameError: name 'inf' is not defined
+找到文件中的那一行，
+前面加入：
+import math
+inf = math.inf
+```
+
+一般过程：
+
+```python
+import torch
+import deepspeed
+
+# 初始化DeepSpeed引擎
+config = {
+    "train_micro_batch_size_per_gpu": 32,
+    "optimizer": {
+        "type": "Adam",
+        "params": {
+            "lr": 1e-4
+        }
+    }
+}
+
+model.cuda()
+model_engine, optimizer, _, _ = deepspeed.initialize(config_params=config，
+                                              model=model,
+                                              model_parameters=model.parameters())
+
+# 获取本地rank和设备
+local_rank = engine.local_rank
+device = engine.device
+
+# 加载数据
+train_loader = engine.train_dataloader
+
+# 训练循环
+for epoch in range(10):
+    total_loss = 0.0
+    for batch_idx, (data, target) in enumerate(train_loader):
+        data, target = data.cuda(), target.cuda()
+        # 前向传播和损失计算
+        logits = model_engine.forward(data)
+        loss = CrossEntropyLoss(data, target)
+        # 反向传播和优化器更新
+        model_engine.backward(loss)
+        model_engine.step()
+        ...
+```
+
+其余的loss的reduct的output的allgather都可以使用pytorch原生的。
+
 # 参考
 
 > [PyTorch分布式训练简明教程(2022更新版) - 知乎 (zhihu.com)](https://zhuanlan.zhihu.com/p/113694038)
@@ -376,3 +457,5 @@ hvd.broadcast_optimizer_state(optimizer, root_rank=0)
 > https://www.w3cschool.cn/article/76555860.htm
 >
 > [API — Horovod documentation](https://horovod.readthedocs.io/en/stable/api.html?highlight=allreduce#module-horovod.torch)
+>
+> [ChatGPT - Poe](https://poe.com/ChatGPT)

@@ -172,7 +172,8 @@ class Trainer:
         return loss_total, correct_total / num_total
 
     def test(self, model, test_loader, labels):
-        model.eval()
+        self.model = model
+        self.model.eval()
         preds = []
         trues = []
         with torch.no_grad():

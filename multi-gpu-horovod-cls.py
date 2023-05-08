@@ -206,7 +206,7 @@ class Trainer:
         if self.args.local_rank == 0:
             end = time.time()
             print("耗时：{}分钟".format((end - start) / 60))
-        if not self.args.dev:
+        if not self.args.dev and self.args.local_rank == 0:
             torch.save(self.model.state_dict(), self.args.ckpt_path)
 
     def dev(self, dev_loader):
@@ -231,7 +231,8 @@ class Trainer:
         return loss_total, correct_total / num_total
 
     def test(self, model, test_loader, labels):
-        model.eval()
+        self.model = model
+        self.model.eval()
         preds = []
         trues = []
         with torch.no_grad():
