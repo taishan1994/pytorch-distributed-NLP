@@ -1,4 +1,5 @@
 import os
+import time
 import json
 import random
 import torch
@@ -96,39 +97,38 @@ class Collate:
         }
         return return_data
 
+def build_optimizer(model, args):
+    no_decay = ['bias', 'LayerNorm.weight']
+    optimizer_grouped_parameters = [
+        {'params': [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)],
+         'weight_decay': args.weight_decay},
+        {'params': [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)],
+         'weight_decay': 0.0}
+    ]
+
+    # optimizer = AdamW(model.parameters(), lr=learning_rate)
+    optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate)
+    return optimizer
 
 class Trainer:
-    def __init__(self, args):
+    def __init__(self,
+                 args,
+                 config,
+                 model,
+                 criterion,
+                 optimizer):
         self.args = args
-        self.config = BertConfig.from_pretrained(args.model_path, num_labels=6)
-        self.model = BertForSequenceClassification.from_pretrained(args.model_path,
-                                                                   config=self.config)
-        # 第三步：封装模型
-        self.model.cuda(args.rank)
-        self.model = torch.nn.parallel.DistributedDataParallel(self.model, device_ids=args.device_ids)
-
-        self.criterion = torch.nn.CrossEntropyLoss()
-        self.optimizer = self.build_optimizer()
-
-    def build_optimizer(self):
-        no_decay = ['bias', 'LayerNorm.weight']
-        optimizer_grouped_parameters = [
-            {'params': [p for n, p in self.model.named_parameters() if not any(nd in n for nd in no_decay)],
-             'weight_decay': self.args.weight_decay},
-            {'params': [p for n, p in self.model.named_parameters() if any(nd in n for nd in no_decay)],
-             'weight_decay': 0.0}
-        ]
-
-        # optimizer = AdamW(model.parameters(), lr=learning_rate)
-        optimizer = AdamW(optimizer_grouped_parameters, lr=self.args.learning_rate)
-        return optimizer
+        self.config = config,
+        self.model = model
+        self.criterion = criterion
+        self.optimizer = optimizer
 
     def on_step(self, batch_data):
         # 第六步：根据local_rank将数据分发给指定的GPU
-        label = batch_data["label"].cuda(self.args.rank)
-        input_ids = batch_data["input_ids"].cuda(self.args.rank)
-        token_type_ids = batch_data["token_type_ids"].cuda(self.args.rank)
-        attention_mask = batch_data["attention_mask"].cuda(self.args.rank)
+        label = batch_data["label"].cuda()
+        input_ids = batch_data["input_ids"].cuda()
+        token_type_ids = batch_data["token_type_ids"].cuda()
+        attention_mask = batch_data["attention_mask"].cuda()
         output = self.model(input_ids=input_ids,
                             token_type_ids=token_type_ids,
                             attention_mask=attention_mask,
@@ -157,6 +157,8 @@ class Trainer:
     def train(self, train_loader, dev_loader=None, train_sampler=None):
         gloabl_step = 1
         best_acc = 0.
+        if self.args.local_rank == 0:
+            start = time.time()
         for epoch in range(1, self.args.epochs + 1):
             # 第四步：训练时每一个epoch打乱数据
             train_sampler.set_epoch(epoch)
@@ -178,15 +180,21 @@ class Trainer:
                         epoch, self.args.epochs, gloabl_step, self.args.total_step, loss
                     ))
                 gloabl_step += 1
-                # 第九步：在主rank保存模型
-                if gloabl_step % self.args.eval_step == 0:
-                    loss, accuracy = self.dev(dev_loader)
-                    if self.args.local_rank == 0:
-                        print("【dev】 loss：{:.6f} accuracy：{:.4f}".format(loss, accuracy))
-                        if accuracy > best_acc:
-                            best_acc = accuracy
-                            print("【best accuracy】 {:.4f}".format(best_acc))
-                            torch.save(self.model.state_dict(), self.args.ckpt_path)
+                if self.args.dev:
+                    # 第九步：在主rank保存模型
+                    if gloabl_step % self.args.eval_step == 0:
+                        loss, accuracy = self.dev(dev_loader)
+                        if self.args.local_rank == 0:
+                            print("【dev】 loss：{:.6f} accuracy：{:.4f}".format(loss, accuracy))
+                            if accuracy > best_acc:
+                                best_acc = accuracy
+                                print("【best accuracy】 {:.4f}".format(best_acc))
+                                torch.save(self.model.state_dict(), self.args.ckpt_path)
+        if self.args.local_rank == 0:
+            end = time.time()
+            print("耗时：{}分钟".format((end - start) / 60))
+        if not self.args.dev:
+            torch.save(self.model.state_dict(), self.args.ckpt_path)
 
     def dev(self, dev_loader):
         self.model.eval()
@@ -235,7 +243,6 @@ class Args:
     ckpt_path = "output/multi-gpu-distributed-cls.pt"
     max_seq_len = 128
     ratio = 0.92
-    device = torch.device("cuda" if torch.cuda.is_available else "cpu")
     train_batch_size = 32
     dev_batch_size = 32
     weight_decay = 0.01
@@ -246,9 +253,24 @@ class Args:
     local_world_size = None
     device_ids = None
     rank = None
+    dev = False
 
 
 def main(local_world_size, local_rank):
+    # =======================================
+    # 设置相关参数
+    # 从环境变量中获取参数
+    set_seed()
+
+    label2id = {
+        "其他": 0,
+        "喜好": 1,
+        "悲伤": 2,
+        "厌恶": 3,
+        "愤怒": 4,
+        "高兴": 5,
+    }
+
     env_dict = {
         key: os.environ[key]
         for key in ("MASTER_ADDR", "MASTER_PORT", "RANK", "WORLD_SIZE", "LOCAL_RANK")
@@ -259,22 +281,25 @@ def main(local_world_size, local_rank):
     print(f"[{os.getpid()}] Initializing process group with: {env_dict}")
     # 第一步：初始化
     dist.init_process_group(backend="nccl")
-    # 可选：打印相关的信息
     n = torch.cuda.device_count() // local_world_size
-    # device_ids = list(range(local_rank * n, (local_rank + 1) * n))
     device_ids = [dist.get_rank()]
     print(
         f"[{os.getpid()}] rank = {dist.get_rank()}, "
         + f"world_size = {dist.get_world_size()}, n = {n}, device_ids = {device_ids} \n", end=''
     )
 
-    set_seed()
+    torch.cuda.set_device(int(env_dict["LOCAL_RANK"]))
+
     args = Args()
     args.local_world_size = local_world_size
     args.local_rank = int(env_dict["LOCAL_RANK"])
     args.device_ids = device_ids
     args.rank = dist.get_rank()
     tokenizer = BertTokenizer.from_pretrained(args.model_path)
+    # =======================================
+
+    # =======================================
+    # 加载数据集
     data = load_data()
     # 取1万条数据出来
     data = data[:10000]
@@ -282,15 +307,6 @@ def main(local_world_size, local_rank):
     train_num = int(len(data) * args.ratio)
     train_data = data[:train_num]
     dev_data = data[train_num:]
-
-    label2id = {
-        "其他": 0,
-        "喜好": 1,
-        "悲伤": 2,
-        "厌恶": 3,
-        "愤怒": 4,
-        "高兴": 5,
-    }
 
     collate = Collate(tokenizer, args.max_seq_len)
     # 第二步：DistributedSampler
@@ -312,31 +328,53 @@ def main(local_world_size, local_rank):
                             collate_fn=collate.collate_fn,
                             sampler=dev_sampler)
     test_loader = dev_loader
+    # =======================================
 
-    trainer = Trainer(args)
+    # =======================================
+    # 定义模型、优化器、损失函数
+    config = BertConfig.from_pretrained(args.model_path, num_labels=6)
+    model = BertForSequenceClassification.from_pretrained(args.model_path,
+                                                            config=config)
+    # 第三步：封装模型
+    model.cuda()
+    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=args.device_ids)
+
+    criterion = torch.nn.CrossEntropyLoss()
+    optimizer = build_optimizer(model, args)
+    # =======================================
+
+    # =======================================
+    # 定义训练器，进行训练、验证和测试
+    trainer = Trainer(args,
+                      config,
+                      model,
+                      criterion,
+                      optimizer)
 
     trainer.train(train_loader, dev_loader, train_sampler)
 
     labels = list(label2id.keys())
     config = BertConfig.from_pretrained(args.model_path, num_labels=6)
     model = BertForSequenceClassification.from_pretrained(args.model_path, config=config)
-    model.cuda(args.local_rank)
+    model.cuda()
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=args.device_ids)
     model.load_state_dict(torch.load(args.ckpt_path))
     report = trainer.test(model, test_loader, labels)
-    if self.args.local_rank == 0:
+    if args.local_rank == 0:
         print(report)
+    # =======================================
+
+    # =======================================
     # 第十一步
     dist.destroy_process_group()
+    # =======================================
 
 
 if __name__ == '__main__':
-    # 第零步：需要定义两个参数
     import argparse
-
     parser = argparse.ArgumentParser()
+    # 第零步：需要定义一个参数local-rank
     parser.add_argument("--local-rank", type=int, default=0)
-    # This needs to be explicitly passed in
     parser.add_argument("--local_world_size", type=int, default=1)
     p_args = parser.parse_args()
     main(p_args.local_world_size, p_args.local_rank)

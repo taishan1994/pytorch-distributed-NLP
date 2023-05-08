@@ -1,4 +1,5 @@
 import json
+import time
 import random
 import torch
 import torch.nn as nn
@@ -82,35 +83,39 @@ class Collate:
         }
         return return_data
 
+def build_optimizer(model, args):
+    no_decay = ['bias', 'LayerNorm.weight']
+    optimizer_grouped_parameters = [
+        {'params': [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)],
+         'weight_decay': args.weight_decay},
+        {'params': [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)],
+         'weight_decay': 0.0}
+    ]
+
+    # optimizer = AdamW(model.parameters(), lr=learning_rate)
+    optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate)
+    return optimizer
 
 class Trainer:
-    def __init__(self, args):
+    def __init__(self,
+                 args,
+                 config,
+                 model,
+                 criterion,
+                 optimizer):
         self.args = args
-        self.config = BertConfig.from_pretrained(args.model_path, num_labels=6)
-        self.model = BertForSequenceClassification.from_pretrained(args.model_path,
-                                                                   config=self.config)
-        self.model.cuda()
-        self.criterion = torch.nn.CrossEntropyLoss()
-        self.optimizer = self.build_optimizer()
+        self.device = args.device
+        self.config = config
+        self.model = model
+        self.criterion =criterion
+        self.optimizer = optimizer
 
-    def build_optimizer(self):
-        no_decay = ['bias', 'LayerNorm.weight']
-        optimizer_grouped_parameters = [
-            {'params': [p for n, p in self.model.named_parameters() if not any(nd in n for nd in no_decay)],
-             'weight_decay': self.args.weight_decay},
-            {'params': [p for n, p in self.model.named_parameters() if any(nd in n for nd in no_decay)],
-             'weight_decay': 0.0}
-        ]
-
-        # optimizer = AdamW(model.parameters(), lr=learning_rate)
-        optimizer = AdamW(optimizer_grouped_parameters, lr=self.args.learning_rate)
-        return optimizer
 
     def on_step(self, batch_data):
-        label = batch_data["label"].cuda()
-        input_ids = batch_data["input_ids"].cuda()
-        token_type_ids = batch_data["token_type_ids"].cuda()
-        attention_mask = batch_data["attention_mask"].cuda()
+        label = batch_data["label"].to(self.device)
+        input_ids = batch_data["input_ids"].to(self.device)
+        token_type_ids = batch_data["token_type_ids"].to(self.device)
+        attention_mask = batch_data["attention_mask"].to(self.device)
         output = self.model(input_ids=input_ids,
                             token_type_ids=token_type_ids,
                             attention_mask=attention_mask,
@@ -121,11 +126,11 @@ class Trainer:
     def train(self, train_loader, dev_loader=None):
         gloabl_step = 1
         best_acc = 0.
+        start = time.time()
         for epoch in range(1, self.args.epochs + 1):
             for step, batch_data in enumerate(train_loader):
                 self.model.train()
                 logits, label = self.on_step(batch_data)
-                # 实际上这里计算的loss和output[0]是一样的
                 loss = self.criterion(logits, label)
                 self.optimizer.zero_grad()
                 loss.backward()
@@ -134,13 +139,18 @@ class Trainer:
                     epoch, self.args.epochs, gloabl_step, self.args.total_step, loss.item()
                 ))
                 gloabl_step += 1
-                if gloabl_step % self.args.eval_step == 0:
-                    loss, accuracy = self.dev(dev_loader)
-                    print("【dev】 loss：{:.6f} accuracy：{:.4f}".format(loss, accuracy))
-                    if accuracy > best_acc:
-                        best_acc = accuracy
-                        print("【best accuracy】 {:.4f}".format(best_acc))
-                        torch.save(self.model.state_dict(), self.args.ckpt_path)
+                if self.args.dev:
+                    if gloabl_step % self.args.eval_step == 0:
+                        loss, accuracy = self.dev(dev_loader)
+                        print("【dev】 loss：{:.6f} accuracy：{:.4f}".format(loss, accuracy))
+                        if accuracy > best_acc:
+                            best_acc = accuracy
+                            print("【best accuracy】 {:.4f}".format(best_acc))
+                            torch.save(self.model.state_dict(), self.args.ckpt_path)
+        end = time.time()
+        print("耗时：{}分钟".format((end - start) / 60))
+        if not self.args.dev:
+            torch.save(self.model.state_dict(), self.args.ckpt_path)
 
     def dev(self, dev_loader):
         self.model.eval()
@@ -190,20 +200,13 @@ class Args:
     epochs = 1
     learning_rate = 3e-5
     eval_step = 100
+    dev = False
 
 
 def main():
+    # =======================================
+    # 定义相关参数
     set_seed()
-    args = Args()
-    tokenizer = BertTokenizer.from_pretrained(args.model_path)
-    data = load_data()
-    # 取1万条数据出来
-    data = data[:10000]
-    random.shuffle(data)
-    train_num = int(len(data) * args.ratio)
-    train_data = data[:train_num]
-    dev_data = data[train_num:]
-
     label2id = {
         "其他": 0,
         "喜好": 1,
@@ -212,6 +215,19 @@ def main():
         "愤怒": 4,
         "高兴": 5,
     }
+    args = Args()
+    tokenizer = BertTokenizer.from_pretrained(args.model_path)
+    # =======================================
+
+    # =======================================
+    # 加载数据集
+    data = load_data()
+    # 取1万条数据出来
+    data = data[:10000]
+    random.shuffle(data)
+    train_num = int(len(data) * args.ratio)
+    train_data = data[:train_num]
+    dev_data = data[train_num:]
 
     collate = Collate(tokenizer, args.max_seq_len)
     train_loader = DataLoader(train_data,
@@ -227,18 +243,37 @@ def main():
                             num_workers=2,
                             collate_fn=collate.collate_fn)
     test_loader = dev_loader
+    # =======================================
 
-    trainer = Trainer(args)
+    # =======================================
+    # 定义模型、优化器、损失函数
+    config = BertConfig.from_pretrained(args.model_path, num_labels=6)
+    model = BertForSequenceClassification.from_pretrained(args.model_path,
+                                                               config=config)
+    model.to(args.device)
+    criterion = torch.nn.CrossEntropyLoss()
+    optimizer = build_optimizer(model, args)
 
+    # =======================================
+    # 定义训练器
+    trainer = Trainer(args,
+                      config,
+                      model,
+                      criterion,
+                      optimizer)
+
+    # 训练和验证
     trainer.train(train_loader, dev_loader)
 
+    # 测试
     labels = list(label2id.keys())
     config = BertConfig.from_pretrained(args.model_path, num_labels=6)
     model = BertForSequenceClassification.from_pretrained(args.model_path, config=config)
-    model.cuda()
+    model.to(args.device)
     model.load_state_dict(torch.load(args.ckpt_path))
     report = trainer.test(model, test_loader, labels)
     print(report)
+    # =======================================
 
 
 if __name__ == '__main__':

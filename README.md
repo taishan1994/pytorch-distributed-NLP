@@ -3,7 +3,20 @@ pytorch单机多卡分布式训练-中文文本分类。一直想尝试来着，
 
 # 环境
 
-```Linux+torch+transformers```
+```Linux+torch==2.0+transformers==4.28.1```
+
+# 对比
+
+| 方法                         | 耗时(分钟)             |
+| ---------------------------- | ---------------------- |
+| 单GPU                        | 2.8276                 |
+| dataparallel                 | 2.0301                 |
+| distributed                  | 1.4120                 |
+| distributed-multiprocess     | 1.4921                 |
+| distributed-multiprocess-amp | 0.6336                 |
+| horovod                      | 5.1228（存在一些问题） |
+
+
 
 # 单GPU训练
 
@@ -94,7 +107,7 @@ dev_loader = DataLoader(dev_dataset,
 # 第三步：封装模型
 self.model = BertForSequenceClassification.from_pretrained(args.model_path,
                                                                    config=self.config)
-self.model.cuda(args.rank)
+self.model.cuda()
 self.model = torch.nn.parallel.DistributedDataParallel(self.model, device_ids=args.device_ids)
 # ========================================
 for epoch in range(1, self.args.epochs + 1):
@@ -106,10 +119,10 @@ for epoch in range(1, self.args.epochs + 1):
         """
         def on_step(self, batch_data):
             # 第五步：根据local_rank将数据分发给指定的GPU
-            label = batch_data["label"].cuda(self.args.rank)
-            input_ids = batch_data["input_ids"].cuda(self.args.rank)
-            token_type_ids = batch_data["token_type_ids"].cuda(self.args.rank)
-            attention_mask = batch_data["attention_mask"].cuda(self.args.rank)
+            label = batch_data["label"].cuda()
+            input_ids = batch_data["input_ids"].cuda()
+            token_type_ids = batch_data["token_type_ids"].cuda()
+            attention_mask = batch_data["attention_mask"].cuda()
             output = self.model(input_ids=input_ids,
                                 token_type_ids=token_type_ids,
                                 attention_mask=attention_mask,
@@ -209,10 +222,146 @@ def output_reduce(self, outputs, targets):
 
 ```python
 model = BertForSequenceClassification.from_pretrained(args.model_path, config=config)
-model.cuda(args.local_rank)
+model.cuda()
 model = torch.nn.parallel.DistributedDataParallel(model, device_ids=args.device_ids)
 model.load_state_dict(torch.load(args.ckpt_path))
 ```
+
+# distributed分布式训练-multiprocess启动
+
+运行：```python multi-gpu-distributed-mp-cls.py --local_world_size=2```
+
+![image-20230508100415861](README.assets/image-20230508100415861.png)
+
+```python
+【train】 epoch：1/1 step：1/144 loss：1.765123
+【train】 epoch：1/1 step：2/144 loss：1.646639
+【train】 epoch：1/1 step：3/144 loss：1.780050
+【train】 epoch：1/1 step：4/144 loss：1.642378
+【train】 epoch：1/1 step：5/144 loss：1.599494
+```
+
+使用时，只需要调用 torch.multiprocessing.spawn，torch.multiprocessing 就会帮助我们自动创建进程。例如有两张显卡，就设置 nprocs=2启动两个进程。
+
+```python
+mp.spawn(main_worker, nprocs=2, args=(args,))
+```
+
+主函数main_worker里面的第一个参数必须是local_rank，会自动给它赋值。然后我们需要修改：
+
+```python
+dist.init_process_group(backend="nccl", init_method="tcp://localhost:12345", world_size=local_world_size, rank=local_rank)
+```
+
+由于环境变量里面没有我们所需要的参数了，我们需要自己定义并传入到init_process_group里面。
+
+# AMP混合精度训练
+
+运行：```python multi-gpu-distributed-mp-amp-cls.py --local_world_size=2```
+
+从1.6版本开始，Pytorch原生支持自动混合精度训练，并已进入稳定阶段，
+
+![image-20230508154206416](README.assets/image-20230508154206416.png)
+
+```python
+【train】 epoch：1/1 step：1/144 loss：1.799011
+【train】 epoch：1/1 step：2/144 loss：1.654877
+【train】 epoch：1/1 step：3/144 loss：1.808228
+【train】 epoch：1/1 step：4/144 loss：1.615723
+【train】 epoch：1/1 step：5/144 loss：1.652313
+```
+
+在distributed的基础上，额外添加以下代码即可：
+
+```python
+if self.args.use_amp:
+    scaler = torch.cuda.amp.GradScaler()
+for epoch in range(1, self.args.epochs + 1):
+    train_sampler.set_epoch(epoch)
+    for step, batch_data in enumerate(train_loader):
+        self.model.train()
+        if self.args.use_amp:
+            with torch.cuda.amp.autocast():
+                logits, label = self.on_step(batch_data)
+                loss = self.criterion(logits, label)
+                torch.distributed.barrier()
+                scaler.scale(loss).backward()
+                scaler.step(self.optimizer)
+                scaler.update()
+        else:
+            logits, label = self.on_step(batch_data)
+            loss = self.criterion(logits, label)
+            torch.distributed.barrier()
+            loss.backward()
+            self.optimizer.step()
+```
+
+训练的时长明显变短了，模型的性能也没有下降，非常不错。
+
+# horovod
+
+依赖：```horovod==0.27.0```
+
+运行：```horovodrun -np 2 -H localhost:2 python multi-gpu-horovod-cls.py```
+
+![image-20230508142608957](README.assets/image-20230508142608957.png)
+
+```python
+[0]<stdout>:【train】 epoch：1/1 step：1/144 loss：1.798987
+[0]<stdout>:【train】 epoch：1/1 step：2/144 loss：1.654544
+[0]<stdout>:【train】 epoch：1/1 step：3/144 loss：1.808229
+[0]<stdout>:【train】 epoch：1/1 step：4/144 loss：1.616281
+[0]<stdout>:【train】 epoch：1/1 step：5/144 loss：1.652950
+```
+
+一般流程：
+
+```python
+hvd.init()
+args.local_rank = hvd.local_rank()
+
+torch.cuda.set_device(args.local_rank)
+
+collate = Collate(tokenizer, args.max_seq_len)
+train_dataset = ClsDataset(train_data)
+train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, num_replicas=hvd.size(), rank=hvd.rank())
+train_loader = DataLoader(train_dataset,
+                          batch_size=args.train_batch_size,
+                          num_workers=2,
+                          collate_fn=collate.collate_fn,
+                          sampler=train_sampler)
+total_step = len(train_loader) * args.epochs
+args.total_step = total_step
+dev_dataset = ClsDataset(dev_data)
+dev_sampler = torch.utils.data.distributed.DistributedSampler(dev_dataset, num_replicas=hvd.size(), rank=hvd.rank())
+dev_loader = DataLoader(dev_dataset,
+                        batch_size=args.dev_batch_size,
+                        shuffle=False,
+                        num_workers=2,
+                        collate_fn=collate.collate_fn,
+                        sampler=dev_sampler)
+
+# 这里需要注意，不需要再封装了
+model = BertForSequenceClassification.from_pretrained(args.model_path,
+                                                          config=config)
+model.cuda()
+hvd.broadcast_parameters(model.state_dict(), root_rank=0)
+optimizer = build_optimizer(model, args)
+
+compression = hvd.Compression.fp16
+optimizer = hvd.DistributedOptimizer(
+    optimizer,
+    named_parameters=model.named_parameters(),
+    compression=compression)
+hvd.broadcast_optimizer_state(optimizer, root_rank=0)
+```
+
+其余的和pytorch自带的distributed差不多，计算loss和ouptput的时候需要注意其定义的方法的区别，具体可参考其文档。
+
+整体流程没有问题，但存在一些问题：
+
+- 训练时长较长。
+- 模型并没有被有效的训练。
 
 # 参考
 
@@ -223,3 +372,7 @@ model.load_state_dict(torch.load(args.ckpt_path))
 > [Pytorch 分布式训练的坑（use_env, loacl_rank) - 知乎 (zhihu.com)](https://zhuanlan.zhihu.com/p/501632575)
 >
 > https://pytorch.org/docs/stable/elastic/run.html
+>
+> https://www.w3cschool.cn/article/76555860.htm
+>
+> [API — Horovod documentation](https://horovod.readthedocs.io/en/stable/api.html?highlight=allreduce#module-horovod.torch)
