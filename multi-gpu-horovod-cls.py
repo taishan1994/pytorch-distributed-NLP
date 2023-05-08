@@ -333,7 +333,6 @@ def main_worker():
     config = BertConfig.from_pretrained(args.model_path, num_labels=6)
     model = BertForSequenceClassification.from_pretrained(args.model_path,
                                                           config=config)
-    # 第三步：封装模型
     model.cuda()
     hvd.broadcast_parameters(model.state_dict(), root_rank=0)
     # model = torch.nn.parallel.DistributedDataParallel(model, device_ids=args.device_ids)
