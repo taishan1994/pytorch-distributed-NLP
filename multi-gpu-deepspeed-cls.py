@@ -157,11 +157,13 @@ class Trainer:
                                 best_acc = accuracy
                                 print("【best accuracy】 {:.4f}".format(best_acc))
                                 torch.save(self.model_engine.state_dict(), self.args.ckpt_path)
+                                # self.model_engine.save_checkpoint("./")
         if self.args.local_rank == 0:
             end = time.time()
             print("耗时：{}分钟".format((end - start) / 60))
         if not self.args.dev and self.args.local_rank == 0:
             torch.save(self.model_engine.state_dict(), self.args.ckpt_path)
+            # self.model_engine.save_checkpoint("./")
 
     def dev(self, dev_loader):
         self.model_engine.eval()
@@ -219,7 +221,7 @@ deepspeed_config = {
   "optimizer": {
     "type": "AdamW",
     "params": {
-      "lr": 0.0001
+      "lr": 3e-5
     }
   },
   "fp16": {
@@ -313,7 +315,7 @@ def main():
     config = BertConfig.from_pretrained(args.model_path, num_labels=6)
     model = BertForSequenceClassification.from_pretrained(args.model_path, config=config)
     model.cuda()
-    model_engine, optimizer, _, _ = deepspeed.initialize(
+    model_engine, optimizer, _, _ = deepspeed.initialize_from_checkpoint(
         config=deepspeed_config,
         model=model,
         model_parameters=model.parameters())
