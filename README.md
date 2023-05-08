@@ -373,7 +373,7 @@ sudo apt-get install openmpi-bin libopenmpi-dev
 pip install mpi4py
 ```
 
-![image-20230508171612641](C:\Users\Administrator\Desktop\github\pytorch-distributed\README.assets\image-20230508171612641.png)
+![image-20230508171612641](README.assets/image-20230508171612641.png)
 
 ```python
 【train】 epoch：1/1 step：1/288 loss：1.817383
