@@ -492,7 +492,7 @@ accelerate launch multi-gpu-accelerate-cls.py
 python -m torch.distributed.launch --nproc_per_node 2 --use_env multi-gpu-accelerate-cls.py
 ```
 
-![image-20230509113417401](C:\Users\Administrator\Desktop\github\pytorch-distributed\README.assets\image-20230509113417401.png)
+![image-20230509113417401](README.assets/image-20230509113417401.png)
 
 ```python
 【train】 epoch：1/1 step：1/144 loss：1.795169
