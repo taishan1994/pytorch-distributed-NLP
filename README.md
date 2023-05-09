@@ -545,7 +545,7 @@ model_engine, optimizer_engine, train_loader_engine, dev_loader_engine = acceler
 
 运行：```python multi-gpu-transformers-cls.py```
 
-![image-20230509135719914](C:\Users\Administrator\Desktop\github\pytorch-distributed\README.assets\image-20230509135719914.png)
+![image-20230509135719914](README.assets/image-20230509135719914.png)
 
 ```python
 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████| 144/144 [00:49<00:00,  2.92it/s]
