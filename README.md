@@ -17,6 +17,7 @@ pytorch单机多卡分布式训练-中文文本分类。一直想尝试来着，
 | horovod                      | 5.1228（存在一些问题） |
 | deepspeed                    | 1.0114                 |
 | accelerate                   | 1.3667                 |
+| transformers-Trainer         | 0.4900                 |
 
 # 单GPU训练
 
@@ -535,12 +536,64 @@ model_engine, optimizer_engine, train_loader_engine, dev_loader_engine = acceler
 
 其余和distributed基本保持一致。需要注意的是我们也可以使用accelerate自带的一些api操作，需要查看其文档。
 
+# transformers的Trainer分布式训练
+
+运行：```python multi-gpu-transfirmers-cls.py```
+
+![image-20230509135719914](C:\Users\Administrator\Desktop\github\pytorch-distributed\README.assets\image-20230509135719914.png)
+
+```python
+100%|█████████████████████████████████████████████████████████████████████████████████████████████████████| 144/144 [00:49<00:00,  2.92it/s]
+100%|███████████████████████████████████████████████████████████████████████████████████████████████████████| 13/13 [00:01<00:00, 10.75it/s]
+{'eval_loss': 1.1885839700698853, 'eval_accuracy：': 0.5525, 'eval_runtime': 1.31, 'eval_samples_per_second': 610.67, 'eval_steps_per_second': 9.923, 'epoch': 1.0}
+
+```
+
+一般过程：
+
+```python
+def comput_metrics():
+    pass
+
+class Collate:
+    def __init__():
+        pass
+    def collate_tn():
+        pass
+    
+train_dtaset = ...
+dev_dataset = ...
+
+model = ...
+
+# 定义参数
+training_args = TrainingArguments()
+
+# 定义训练器
+trainer = Trainer(
+	model=model,
+    args=training_args,
+    train_dataset=train_dtaset,
+    eval_dataset=dev_dataset,
+    data_collator=collate.collate_fn,
+    tokenizer=tokenizer,
+    compute_metrics=compute_metrics,
+)
+
+trainer.train()
+
+trainer.evaluate()
+```
+
+需要注意的是我们直接使用transformers里面的BertForSequenceClassification，如果是自定义的模型，则需要适配考虑输入和输出以及损失函数的计算，这里不作展开。
+
 # 补充
 
 - 不难发现大多情况下基本的流程是差不多的。
 - 我们需要一个管家帮我们管理模型、数据、参数等信息怎么分配到不同的GPU上，这个管家可以是原生distributed或者是accelerate、deepspeed。
 - 需要注意到底是不同GPU处理相同数据还是不同数据，比如deepspeed、accelerate。
 - 以上代码可能只是一个基本的使用，更高级的使用可能还需要自行去查阅相关的资料。
+- 还需要注意模型是怎么保存和加载的，一般情况下我们可以使用torch自带的方式来保存和加载模型，但是对于deepspeed中使用的ZeRO3，因为它将模型参数分块到不同的GPU上，因此要使用其带的保存和加载的方法。同时分布式测试的时候，要主要加载模型的时候先用分布式库封装一下（因为我们保存模型的时候是保存了封装之后的模型）。
 
 # 参考
 
