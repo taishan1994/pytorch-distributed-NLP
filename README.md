@@ -21,7 +21,7 @@ pytorch单机多卡分布式训练-中文文本分类。一直想尝试来着，
 
 # 单GPU训练
 
-运行：```python single-gpu-cls.py```
+**运行**：```python single-gpu-cls.py```
 
 ![image-20230506162110739](README.assets/image-20230506162110739.png)
 
@@ -37,9 +37,9 @@ pytorch单机多卡分布式训练-中文文本分类。一直想尝试来着，
 
 # DataParallel分布式训练
 
-运行：```python multi-gpu-dataparrel-cls.py```
+**运行**：```python multi-gpu-dataparrel-cls.py```
 
-一般流程：
+**一般流程：**
 
 ```python
 gpu_ids = [0,1]
@@ -63,11 +63,11 @@ model = nn.DataParallel(model, device_ids=args.gpu_ids, output_device=args.gpu_i
 
 总的step数并没有减少，但是总占用的GPU显存分布在两张显卡上。
 
-优点：
+**优点：**
 
 - 易于使用。
 
-缺点：
+**缺点：**
 
 - 它使用一个进程来计算模型权重，然后在每个批处理期间将分发到每个GPU，因此通信很快成为一个瓶颈，GPU利用率通常很低。
 - 要求所有的GPU都在同一个节点上（不支持分布式）。
@@ -75,7 +75,7 @@ model = nn.DataParallel(model, device_ids=args.gpu_ids, output_device=args.gpu_i
 
 # Distributed分布式训练
 
-运行：
+**运行：**
 
 ```python
 python -m torch.distributed.launch --nnode=1 --node_rank=0 --nproc_per_node=2 --use_env multi-gpu-distributed-cls.py --local_world_size=2
@@ -100,7 +100,7 @@ python -m torch.distributed.launch --nnode=1 --node_rank=0 --nproc_per_node=2 mu
 【train】 epoch：1/1 step：5/144 loss：1.599494
 ```
 
-说明：
+**说明：**
 
 - nnode：1个节点
 
@@ -141,7 +141,7 @@ model = torch.nn.parallel.DistributedDataParallel(model, device_ids=args.device_
 model.load_state_dict(torch.load(args.ckpt_path))
 ```
 
-一般流程：
+**一般流程：**
 
 ```python
 # 第零步：需要定义一个参数
@@ -231,7 +231,7 @@ dist.destroy_process_group()
 
 # distributed分布式训练-multiprocess启动
 
-运行：```python multi-gpu-distributed-mp-cls.py --local_world_size=2```
+**运行：**```python multi-gpu-distributed-mp-cls.py --local_world_size=2```
 
 ![image-20230508100415861](README.assets/image-20230508100415861.png)
 
@@ -243,7 +243,7 @@ dist.destroy_process_group()
 【train】 epoch：1/1 step：5/144 loss：1.599494
 ```
 
-说明：
+**说明：**
 
 使用时，只需要调用 torch.multiprocessing.spawn，torch.multiprocessing 就会帮助我们自动创建进程。例如有两张显卡，就设置 nprocs=2启动两个进程。
 
@@ -259,7 +259,7 @@ dist.init_process_group(backend="nccl", init_method="tcp://localhost:12345", wor
 
 由于环境变量里面没有我们所需要的参数了，我们需要自己定义并传入到init_process_group里面。
 
-一般流程：
+**一般流程：**
 
 ```python
 main_worker(local_rank, args):
@@ -271,7 +271,7 @@ if __name__ == "__main__":
 
 # AMP混合精度训练
 
-运行：```python multi-gpu-distributed-mp-amp-cls.py --local_world_size=2```
+**运行：**```python multi-gpu-distributed-mp-amp-cls.py --local_world_size=2```
 
 从1.6版本开始，Pytorch原生支持自动混合精度训练，并已进入稳定阶段，
 
@@ -285,7 +285,7 @@ if __name__ == "__main__":
 【train】 epoch：1/1 step：5/144 loss：1.652313
 ```
 
-一般流程：
+**一般流程：**
 
 在distributed的基础上，额外添加以下代码即可：
 
@@ -316,9 +316,9 @@ for epoch in range(1, self.args.epochs + 1):
 
 # horovod分布式训练
 
-依赖：```horovod==0.27.0```
+**依赖：**```horovod==0.27.0```
 
-运行：```horovodrun -np 2 -H localhost:2 python multi-gpu-horovod-cls.py```
+**运行：**```horovodrun -np 2 -H localhost:2 python multi-gpu-horovod-cls.py```
 
 ![image-20230508142608957](README.assets/image-20230508142608957.png)
 
@@ -330,7 +330,7 @@ for epoch in range(1, self.args.epochs + 1):
 [0]<stdout>:【train】 epoch：1/1 step：5/144 loss：1.652950
 ```
 
-一般流程：
+**一般流程：**
 
 ```python
 hvd.init()
@@ -376,7 +376,7 @@ hvd.broadcast_optimizer_state(optimizer, root_rank=0)
 
 # deepspeed分布式训练
 
-依赖：
+**依赖：**
 
 ```python
 pip install deepspeed==0.8.1
@@ -385,7 +385,7 @@ sudo apt-get install openmpi-bin libopenmpi-dev
 pip install mpi4py
 ```
 
-运行：```deepspeed --master_port 11222 multi-gpu-deepspeed-cls.py```
+**运行：**```deepspeed --master_port 11222 multi-gpu-deepspeed-cls.py```
 
 ![image-20230508171612641](README.assets/image-20230508171612641.png)
 
@@ -397,7 +397,7 @@ pip install mpi4py
 【train】 epoch：1/1 step：5/288 loss：1.826172
 ```
 
-如果报错：
+**如果报错：**
 
 - ModuleNotFoundError: No module named 'torch._six：找到报错的文件，
 
@@ -413,7 +413,7 @@ import math
 inf = math.inf
 ```
 
-一般过程：
+**一般过程：**
 
 ```python
 import torch
@@ -486,9 +486,9 @@ python zero_to_fp32.py /root/pytorch-distributed/output/deepspeed/ ./pytorch_mod
 
 # accelerate分布式训练
 
-依赖：```pip install accelerate==0.17.1```
+**依赖：**```pip install accelerate==0.17.1```
 
-运行：
+**运行：**
 
 ```python
 accelerate launch multi-gpu-accelerate-cls.py
@@ -525,7 +525,7 @@ python -m torch.distributed.launch --nproc_per_node 2 --use_env multi-gpu-accele
 weighted avg       0.59      0.57      0.56      1600
 ```
 
-一般流程：
+**一般流程：**
 
 ```python
 train_loader = ...
@@ -543,7 +543,7 @@ model_engine, optimizer_engine, train_loader_engine, dev_loader_engine = acceler
 
 # transformers的Trainer分布式训练
 
-运行：```python multi-gpu-transformers-cls.py```
+**运行：**```python multi-gpu-transformers-cls.py```
 
 ![image-20230509135719914](README.assets/image-20230509135719914.png)
 
@@ -554,7 +554,7 @@ model_engine, optimizer_engine, train_loader_engine, dev_loader_engine = acceler
 
 ```
 
-一般过程：
+**一般过程：**
 
 ```python
 def comput_metrics():
