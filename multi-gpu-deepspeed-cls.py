@@ -96,9 +96,8 @@ class Trainer:
         self.args = args
         self.config = config
         self.model_engine = model_engine
-        self.criterion =criterion
+        self.criterion = criterion
         self.optimizer = optimizer
-
 
     def on_step(self, batch_data):
         label = batch_data["label"].cuda()
@@ -106,9 +105,9 @@ class Trainer:
         token_type_ids = batch_data["token_type_ids"].cuda()
         attention_mask = batch_data["attention_mask"].cuda()
         output = self.model_engine.forward(input_ids=input_ids,
-                            token_type_ids=token_type_ids,
-                            attention_mask=attention_mask,
-                            labels=label)
+                                           token_type_ids=token_type_ids,
+                                           attention_mask=attention_mask,
+                                           labels=label)
         logits = output[1]
         return logits, label
 
@@ -153,17 +152,18 @@ class Trainer:
                         loss, accuracy = self.dev(dev_loader)
                         if self.args.local_rank == 0:
                             print("【dev】 loss：{:.6f} accuracy：{:.4f}".format(loss, accuracy))
-                            if accuracy > best_acc:
-                                best_acc = accuracy
+                        if accuracy > best_acc:
+                            best_acc = accuracy
+                            self.model_engine.save_checkpoint(self.args.ckpt_path, save_latest=True)
+                            if self.args.local_rank == 0:
                                 print("【best accuracy】 {:.4f}".format(best_acc))
-                                torch.save(self.model_engine.state_dict(), self.args.ckpt_path)
-                                # self.model_engine.save_checkpoint("./")
+
+
         if self.args.local_rank == 0:
             end = time.time()
             print("耗时：{}分钟".format((end - start) / 60))
-        if not self.args.dev and self.args.local_rank == 0:
-            torch.save(self.model_engine.state_dict(), self.args.ckpt_path)
-            # self.model_engine.save_checkpoint("./")
+        if not self.args.dev:
+            self.model_engine.save_checkpoint(self.args.ckpt_path, save_latest=True)
 
     def dev(self, dev_loader):
         self.model_engine.eval()
@@ -201,13 +201,14 @@ class Trainer:
                 trues.extend(label)
                 preds.extend(pred)
         # print(trues, preds, labels)
+        print(np.array(trues).shape, np.array(preds).shape)
         report = classification_report(trues, preds, target_names=labels)
         return report
 
 
 class Args:
     model_path = "model_hub/chinese-bert-wwm-ext"
-    ckpt_path = "output/single-gpu-cls.pt"
+    ckpt_path = "output/deepspeed/"
     max_seq_len = 128
     ratio = 0.92
     epochs = 1
@@ -215,34 +216,36 @@ class Args:
     dev = False
     local_rank = None
 
+
 deepspeed_config = {
-  "train_micro_batch_size_per_gpu": 32,
-  "gradient_accumulation_steps": 1,
-  "optimizer": {
-    "type": "AdamW",
-    "params": {
-      "lr": 3e-5
-    }
-  },
-  "fp16": {
-    "enabled": True
-  },
-  "zero_optimization": {
-    "stage": 3,
-    "allgather_partitions": True,
-    "allgather_bucket_size": 2e8,
-    "overlap_comm": True,
-    "reduce_scatter": True,
-    "reduce_bucket_size": 2e8
-  },
-  "activation_checkpointing": {
-    "partition_activations": True,
-    "cpu_checkpointing": True,
-    "contiguous_memory_optimization": True
-  },
-  "wall_clock_breakdown": True,
-  "log_dist": False
+    "train_micro_batch_size_per_gpu": 32,
+    "gradient_accumulation_steps": 1,
+    "optimizer": {
+        "type": "AdamW",
+        "params": {
+            "lr": 3e-5
+        }
+    },
+    "fp16": {
+        "enabled": True
+    },
+    "zero_optimization": {
+        "stage": 3,
+        "allgather_partitions": True,
+        "allgather_bucket_size": 2e8,
+        "overlap_comm": True,
+        "reduce_scatter": True,
+        "reduce_bucket_size": 2e8
+    },
+    "activation_checkpointing": {
+        "partition_activations": True,
+        "cpu_checkpointing": True,
+        "contiguous_memory_optimization": True
+    },
+    "wall_clock_breakdown": True,
+    "log_dist": False,
 }
+
 
 def main():
     # =======================================
@@ -294,18 +297,18 @@ def main():
     criterion = torch.nn.CrossEntropyLoss()
 
     model_engine, optimizer, _, _ = deepspeed.initialize(
-      config=deepspeed_config,
-      model=model,
-      model_parameters=model.parameters())
+        config=deepspeed_config,
+        model=model,
+        model_parameters=model.parameters())
 
     args.local_rank = model_engine.local_rank
     # =======================================
     # 定义训练器
     trainer = Trainer(args,
-              config,
-              model_engine,
-              criterion,
-              optimizer)
+                      config,
+                      model_engine,
+                      criterion,
+                      optimizer)
 
     # 训练和验证
     trainer.train(train_loader, dev_loader)
@@ -315,11 +318,13 @@ def main():
     config = BertConfig.from_pretrained(args.model_path, num_labels=6)
     model = BertForSequenceClassification.from_pretrained(args.model_path, config=config)
     model.cuda()
-    model_engine, optimizer, _, _ = deepspeed.initialize_from_checkpoint(
+
+    # 需要重新初始化引擎
+    model_engine, optimizer, _, _ = deepspeed.initialize(
         config=deepspeed_config,
         model=model,
         model_parameters=model.parameters())
-    model_engine.load_state_dict(torch.load(args.ckpt_path))
+    model_engine.load_checkpoint(args.ckpt_path, load_module_only=True)
     report = trainer.test(model_engine, test_loader, labels)
     if args.local_rank == 0:
         print(report)

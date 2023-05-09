@@ -7,17 +7,16 @@ pytorch单机多卡分布式训练-中文文本分类。一直想尝试来着，
 
 # 对比
 
-| 方法                         | 耗时(分钟)                           |
-| ---------------------------- | ------------------------------------ |
-| 单GPU                        | 2.8276                               |
-| dataparallel                 | 2.0301                               |
-| distributed                  | 1.4120                               |
-| distributed-multiprocess     | 1.4921                               |
-| distributed-multiprocess-amp | 0.6336                               |
-| horovod                      | 5.1228（存在一些问题）               |
-| deepspeed                    | 1.0114（训练速度快，但效果没其他好） |
-
-
+| 方法                         | 耗时(分钟)             |
+| ---------------------------- | ---------------------- |
+| 单GPU                        | 2.8276                 |
+| dataparallel                 | 2.0301                 |
+| distributed                  | 1.4120                 |
+| distributed-multiprocess     | 1.4921                 |
+| distributed-multiprocess-amp | 0.6336                 |
+| horovod                      | 5.1228（存在一些问题） |
+| deepspeed                    | 1.0114                 |
+| accelerate                   | 1.3667                 |
 
 # 单GPU训练
 
@@ -37,9 +36,12 @@ pytorch单机多卡分布式训练-中文文本分类。一直想尝试来着，
 
 # DataParallel分布式训练
 
-基本使用：
+运行：```python multi-gpu-dataparrel-cls.py```
+
+一般流程：
 
 ```python
+gpu_ids = [0,1]
 # 第一步：定义模型
 model = BertForSequenceClassification.from_pretrained(args.model_path, config=config)
 # 第二步：这里我们不在使用xxx.to(device)这种方式了，直接用xxx.cuda()将模型或者数据放在GPU上。
@@ -47,8 +49,6 @@ model.cuda()
 # 第三步：nn.DataParallel封装模型，并指定gpu_ids的编码，比如[0,1]使用第1块和第2块GPU,output_device是在那一块GPU上进行汇总计算
 model = nn.DataParallel(model, device_ids=args.gpu_ids, output_device=args.gpu_ids[0])
 ```
-
-运行：```python multi-gpu-dataparrel-cls.py```
 
 ![image-20230506162006099](README.assets/image-20230506162006099.png)
 
@@ -74,7 +74,73 @@ model = nn.DataParallel(model, device_ids=args.gpu_ids, output_device=args.gpu_i
 
 # Distributed分布式训练
 
-基本使用：
+运行：
+
+```python
+python -m torch.distributed.launch --nnode=1 --node_rank=0 --nproc_per_node=2 --use_env multi-gpu-distributed-cls.py --local_world_size=2
+
+或者
+
+python -m torch.distributed.launch --nnode=1 --node_rank=0 --nproc_per_node=2 multi-gpu-distributed-cls.py --local_world_size=2
+```
+
+![image-20230506165535656](README.assets/image-20230506165535656.png)
+
+```python
+[5574] Initializing process group with: {'MASTER_ADDR': '127.0.0.1', 'MASTER_PORT': '29500', 'RANK': '0', 'WORLD_SIZE': '2', 'LOCAL_RANK': '0'}
+[5575] Initializing process group with: {'MASTER_ADDR': '127.0.0.1', 'MASTER_PORT': '29500', 'RANK': '1', 'WORLD_SIZE': '2', 'LOCAL_RANK': '1'}
+[5575] rank = 1, world_size = 2, n = 1, device_ids = [1] 
+[5574] rank = 0, world_size = 2, n = 1, device_ids = [0] 
+
+【train】 epoch：1/1 step：1/144 loss：1.765123
+【train】 epoch：1/1 step：2/144 loss：1.646639
+【train】 epoch：1/1 step：3/144 loss：1.780050
+【train】 epoch：1/1 step：4/144 loss：1.642378
+【train】 epoch：1/1 step：5/144 loss：1.599494
+```
+
+说明：
+
+- nnode：1个节点
+
+- node_rank：节点标识
+
+- nproc_per_node：每个节点2个进程(GPU数目)
+
+- use_env：使用系统的环境变量
+
+- local_world_size：自定义的，GPU的数量
+
+模型会初始化两次，因为起了两个进程，每个进程都需要初始化模型一次。这里说一下rank和local_rank。在单机多卡的情况下rank和local_rank是没有区别的，它标识了当前使用的第几块GPU。
+
+总的step数减少了一半，因为并行处理数据。
+
+在训练的时候进行验证的时候，需要把所有GPU上的结果进行reduce，再进行计算：
+
+```python
+def output_reduce(self, outputs, targets):
+    output_gather_list = [torch.zeros_like(outputs) for _ in range(self.args.local_world_size)]
+    # 把每一个GPU的输出聚合起来
+    dist.all_gather(output_gather_list, outputs)
+
+    outputs = torch.cat(output_gather_list, dim=0)
+    target_gather_list = [torch.zeros_like(targets) for _ in range(self.args.local_world_size)]
+    # 把每一个GPU的输出聚合起来
+    dist.all_gather(target_gather_list, targets)
+    targets = torch.cat(target_gather_list, dim=0)
+    return outputs, targets
+```
+
+在加载保存好的模型进行测试的时候，要先将模型进行封装再加载保存好的权重：
+
+```python
+model = BertForSequenceClassification.from_pretrained(args.model_path, config=config)
+model.cuda()
+model = torch.nn.parallel.DistributedDataParallel(model, device_ids=args.device_ids)
+model.load_state_dict(torch.load(args.ckpt_path))
+```
+
+一般流程：
 
 ```python
 # 第零步：需要定义一个参数
@@ -162,72 +228,6 @@ for epoch in range(1, self.args.epochs + 1):
 dist.destroy_process_group()
 ```
 
-运行：
-
-- nnode：1个节点
-
-- node_rank：节点标识
-
-- nproc_per_node：每个节点2个进程(GPU数目)
-
-- use_env：使用系统的环境变量
-
-- local_world_size：自定义的，GPU的数量
-
-```python
-python -m torch.distributed.launch --nnode=1 --node_rank=0 --nproc_per_node=2 --use_env multi-gpu-distributed-cls.py --local_world_size=2
-
-或者
-
-python -m torch.distributed.launch --nnode=1 --node_rank=0 --nproc_per_node=2 multi-gpu-distributed-cls.py --local_world_size=2
-```
-
-![image-20230506165535656](README.assets/image-20230506165535656.png)
-
-```python
-[5574] Initializing process group with: {'MASTER_ADDR': '127.0.0.1', 'MASTER_PORT': '29500', 'RANK': '0', 'WORLD_SIZE': '2', 'LOCAL_RANK': '0'}
-[5575] Initializing process group with: {'MASTER_ADDR': '127.0.0.1', 'MASTER_PORT': '29500', 'RANK': '1', 'WORLD_SIZE': '2', 'LOCAL_RANK': '1'}
-[5575] rank = 1, world_size = 2, n = 1, device_ids = [1] 
-[5574] rank = 0, world_size = 2, n = 1, device_ids = [0] 
-```
-
-模型会初始化两次，因为起了两个进程，每个进程都需要初始化模型一次。这里说一下rank和local_rank。在单机多卡的情况下rank和local_rank是没有区别的，它标识了当前使用的第几块GPU。
-
-```python
-【train】 epoch：1/1 step：1/144 loss：1.765123
-【train】 epoch：1/1 step：2/144 loss：1.646639
-【train】 epoch：1/1 step：3/144 loss：1.780050
-【train】 epoch：1/1 step：4/144 loss：1.642378
-【train】 epoch：1/1 step：5/144 loss：1.599494
-```
-
-总的step数减少了一半，因为并行处理数据。
-
-在训练的时候进行验证的时候，需要把所有GPU上的结果进行reduce，再进行计算：
-
-```python
-def output_reduce(self, outputs, targets):
-    output_gather_list = [torch.zeros_like(outputs) for _ in range(self.args.local_world_size)]
-    # 把每一个GPU的输出聚合起来
-    dist.all_gather(output_gather_list, outputs)
-
-    outputs = torch.cat(output_gather_list, dim=0)
-    target_gather_list = [torch.zeros_like(targets) for _ in range(self.args.local_world_size)]
-    # 把每一个GPU的输出聚合起来
-    dist.all_gather(target_gather_list, targets)
-    targets = torch.cat(target_gather_list, dim=0)
-    return outputs, targets
-```
-
-在加载保存好的模型进行测试的时候，要先将模型进行封装再加载保存好的权重：
-
-```python
-model = BertForSequenceClassification.from_pretrained(args.model_path, config=config)
-model.cuda()
-model = torch.nn.parallel.DistributedDataParallel(model, device_ids=args.device_ids)
-model.load_state_dict(torch.load(args.ckpt_path))
-```
-
 # distributed分布式训练-multiprocess启动
 
 运行：```python multi-gpu-distributed-mp-cls.py --local_world_size=2```
@@ -242,6 +242,8 @@ model.load_state_dict(torch.load(args.ckpt_path))
 【train】 epoch：1/1 step：5/144 loss：1.599494
 ```
 
+说明：
+
 使用时，只需要调用 torch.multiprocessing.spawn，torch.multiprocessing 就会帮助我们自动创建进程。例如有两张显卡，就设置 nprocs=2启动两个进程。
 
 ```python
@@ -255,6 +257,16 @@ dist.init_process_group(backend="nccl", init_method="tcp://localhost:12345", wor
 ```
 
 由于环境变量里面没有我们所需要的参数了，我们需要自己定义并传入到init_process_group里面。
+
+一般流程：
+
+```python
+main_worker(local_rank, args):
+    # 除了这里要填入参数外，其余和distributed启动基本一致
+    dist.init_process_group(backend="nccl", init_method="tcp://localhost:12345", world_size=local_world_size, rank=local_rank)
+if __name__ == "__main__":
+    mp.spawn(main_worker, nprocs=2, args=(args,))
+```
 
 # AMP混合精度训练
 
@@ -271,6 +283,8 @@ dist.init_process_group(backend="nccl", init_method="tcp://localhost:12345", wor
 【train】 epoch：1/1 step：4/144 loss：1.615723
 【train】 epoch：1/1 step：5/144 loss：1.652313
 ```
+
+一般流程：
 
 在distributed的基础上，额外添加以下代码即可：
 
@@ -299,7 +313,7 @@ for epoch in range(1, self.args.epochs + 1):
 
 训练的时长明显变短了，模型的性能也没有下降，非常不错。
 
-# horovod
+# horovod分布式训练
 
 依赖：```horovod==0.27.0```
 
@@ -373,6 +387,8 @@ sudo apt-get install openmpi-bin libopenmpi-dev
 pip install mpi4py
 ```
 
+运行：```deepspeed -np 2 -H localhost:2 multi-gpu-deepspeed-cls.py```
+
 ![image-20230508171612641](README.assets/image-20230508171612641.png)
 
 ```python
@@ -426,7 +442,8 @@ local_rank = engine.local_rank
 device = engine.device
 
 # 加载数据
-train_loader = engine.train_dataloader
+train_loader = ...
+dev_loader = ...
 
 # 训练循环
 for epoch in range(10):
@@ -444,6 +461,87 @@ for epoch in range(10):
 
 其余的loss的reduct的output的allgather都可以使用pytorch原生的。
 
+需要注意的是在ZeRO第3阶段，模型被划分到不同的GPU了，要注意保存模型的方式。
+
+测试的时候发现每块GPU对每批数据都进行计算了一次，这里可能需要做些修改，暂时还没找到相关的方法。
+
+```python
+              precision    recall  f1-score   support
+
+          其他       0.64      0.66      0.65       546
+          喜好       0.49      0.70      0.57       224
+          悲伤       0.59      0.52      0.55       228
+          厌恶       0.38      0.38      0.38       240
+          愤怒       0.56      0.32      0.41       124
+          高兴       0.72      0.62      0.67       238
+
+    accuracy                           0.57      1600
+   macro avg       0.56      0.53      0.54      1600
+weighted avg       0.58      0.57      0.57      1600
+```
+
+# accelerate分布式训练
+
+运行：
+
+```python
+accelerate launch multi-gpu-accelerate-cls.py
+
+或者
+
+python -m torch.distributed.launch --nproc_per_node 2 --use_env multi-gpu-accelerate-cls.py
+```
+
+![image-20230509113417401](C:\Users\Administrator\Desktop\github\pytorch-distributed\README.assets\image-20230509113417401.png)
+
+```python
+【train】 epoch：1/1 step：1/144 loss：1.795169
+【train】 epoch：1/1 step：2/144 loss：1.744665
+【train】 epoch：1/1 step：3/144 loss：1.631625
+【train】 epoch：1/1 step：4/144 loss：1.543691
+【train】 epoch：1/1 step：5/144 loss：1.788955
+```
+
+同样的，在进行测试的时候每块GPU都计算了一次数据。
+
+```python
+              precision    recall  f1-score   support
+
+          其他       0.64      0.68      0.66       546
+          喜好       0.48      0.63      0.55       224
+          悲伤       0.62      0.48      0.54       228
+          厌恶       0.39      0.53      0.45       240
+          愤怒       0.57      0.19      0.29       124
+          高兴       0.76      0.56      0.65       238
+
+    accuracy                           0.57      1600
+   macro avg       0.58      0.51      0.52      1600
+weighted avg       0.59      0.57      0.56      1600
+```
+
+一般流程：
+
+```python
+train_loader = ...
+dev_loader = ...
+
+accelerator = Accelerator()
+args.local_rank = int(dist.get_rank())
+print(args.local_rank)
+model_engine, optimizer_engine, train_loader_engine, dev_loader_engine = accelerator.prepare(
+    model, optimizer, train_loader, dev_loader
+)
+```
+
+其余和distributed基本保持一致。需要注意的是我们也可以使用accelerate自带的一些api操作，需要查看其文档。
+
+# 补充
+
+- 不难发现大多情况下基本的流程是差不多的。
+- 我们需要一个管家帮我们管理模型、数据、参数等信息怎么分配到不同的GPU上，这个管家可以是原生distributed或者是accelerate、deepspeed。
+- 需要注意到底是不同GPU处理相同数据还是不同数据，比如deepspeed、accelerate。
+- 以上代码可能只是一个基本的使用，更高级的使用可能还需要自行去查阅相关的资料。
+
 # 参考
 
 > [PyTorch分布式训练简明教程(2022更新版) - 知乎 (zhihu.com)](https://zhuanlan.zhihu.com/p/113694038)
@@ -459,3 +557,7 @@ for epoch in range(10):
 > [API — Horovod documentation](https://horovod.readthedocs.io/en/stable/api.html?highlight=allreduce#module-horovod.torch)
 >
 > [ChatGPT - Poe](https://poe.com/ChatGPT)
+>
+> [Model Checkpointing — DeepSpeed 0.9.3 documentation](https://deepspeed.readthedocs.io/en/latest/model-checkpointing.html#deepspeed.DeepSpeedEngine.save_checkpoint)
+>
+> [20分钟吃掉accelerate模型加速工具😋 - 知乎 (zhihu.com)](https://zhuanlan.zhihu.com/p/599274899)
