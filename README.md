@@ -7,17 +7,17 @@ pytorch单机多卡分布式训练-中文文本分类。一直想尝试来着，
 
 # 对比
 
-| 方法                         | 耗时(分钟)             |
-| ---------------------------- | ---------------------- |
-| 单GPU                        | 2.8276                 |
-| dataparallel                 | 2.0301                 |
-| distributed                  | 1.4120                 |
-| distributed-multiprocess     | 1.4921                 |
-| distributed-multiprocess-amp | 0.6336                 |
-| horovod                      | 5.1228（存在一些问题） |
-| deepspeed                    | 1.0114                 |
-| accelerate                   | 1.3667                 |
-| transformers-Trainer         | 0.4900                 |
+| 方法                         | 耗时(分钟) |
+| ---------------------------- | ---------- |
+| 单GPU                        | 2.8276     |
+| dataparallel                 | 2.0301     |
+| distributed                  | 1.4120     |
+| distributed-multiprocess     | 1.4921     |
+| distributed-multiprocess-amp | 0.6336     |
+| horovod                      | 5.1228     |
+| deepspeed                    | 1.0114     |
+| accelerate                   | 1.3667     |
+| transformers-Trainer         | 0.4900     |
 
 # 单GPU训练
 
@@ -372,23 +372,20 @@ optimizer = hvd.DistributedOptimizer(
 hvd.broadcast_optimizer_state(optimizer, root_rank=0)
 ```
 
-其余的和pytorch自带的distributed差不多，计算loss和ouptput的时候需要注意其定义的方法的区别，具体可参考其文档。
-
-整体流程没有问题，但存在一些问题：
-
-- 训练时长较长。
-- 模型并没有被有效的训练。
+其余的和pytorch自带的distributed差不多，计算loss和ouptput的时候需要注意其定义的方法的区别，具体可参考其文档。但不知为何训练反而变得很慢。
 
 # deepspeed分布式训练
 
+依赖：
+
 ```python
-pip install deepspeed
+pip install deepspeed==0.8.1
 sudo apt-get update
 sudo apt-get install openmpi-bin libopenmpi-dev
 pip install mpi4py
 ```
 
-运行：```deepspeed -np 2 -H localhost:2 multi-gpu-deepspeed-cls.py```
+运行：```deepspeed --master_port 11222 multi-gpu-deepspeed-cls.py```
 
 ![image-20230508171612641](README.assets/image-20230508171612641.png)
 
@@ -481,7 +478,15 @@ for epoch in range(10):
 weighted avg       0.58      0.57      0.57      1600
 ```
 
+最后在./output/deepspeed下有一个zero_to_fp32.py文件，我们可以利用将多GPU的模型转换为完整的：
+
+```python
+python zero_to_fp32.py /root/pytorch-distributed/output/deepspeed/ ./pytorch_model.bin
+```
+
 # accelerate分布式训练
+
+依赖：```pip install accelerate==0.17.1```
 
 运行：
 
@@ -538,7 +543,7 @@ model_engine, optimizer_engine, train_loader_engine, dev_loader_engine = acceler
 
 # transformers的Trainer分布式训练
 
-运行：```python multi-gpu-transfirmers-cls.py```
+运行：```python multi-gpu-transformers-cls.py```
 
 ![image-20230509135719914](C:\Users\Administrator\Desktop\github\pytorch-distributed\README.assets\image-20230509135719914.png)
 
@@ -587,6 +592,61 @@ trainer.evaluate()
 
 需要注意的是我们直接使用transformers里面的BertForSequenceClassification，如果是自定义的模型，则需要适配考虑输入和输出以及损失函数的计算，这里不作展开。
 
+# 测试和预测
+
+在保存完模型之后，可以使用test.py进行测试，predict.py进行预测，这里展示预测结果：
+
+```python
+====================================================================================================
+multi_gpu_dataparallel_ckpt_path
+文本： 有些th粉真的是无下限加阴魂不散，天天骚扰攻击当，真的懂音乐吗？
+真实： 厌恶
+预测： 厌恶
+====================================================================================================
+====================================================================================================
+multi_gpu_distributed_ckpt_path
+文本： 有些th粉真的是无下限加阴魂不散，天天骚扰攻击当，真的懂音乐吗？
+真实： 厌恶
+预测： 厌恶
+====================================================================================================
+====================================================================================================
+multi_gpu_distributed_mp_ckpt_path
+文本： 有些th粉真的是无下限加阴魂不散，天天骚扰攻击当，真的懂音乐吗？
+真实： 厌恶
+预测： 厌恶
+====================================================================================================
+====================================================================================================
+multi_gpu_distributed_mp_amp_ckpt_path
+文本： 有些th粉真的是无下限加阴魂不散，天天骚扰攻击当，真的懂音乐吗？
+真实： 厌恶
+预测： 厌恶
+====================================================================================================
+====================================================================================================
+multi_gpu_horovod_ckpt_path
+文本： 有些th粉真的是无下限加阴魂不散，天天骚扰攻击当，真的懂音乐吗？
+真实： 厌恶
+预测： 厌恶
+====================================================================================================
+====================================================================================================
+multi_gpu_deepspeed_ckpt_path
+文本： 有些th粉真的是无下限加阴魂不散，天天骚扰攻击当，真的懂音乐吗？
+真实： 厌恶
+预测： 厌恶
+====================================================================================================
+====================================================================================================
+multi_gpu_accelerate_ckpt_path
+文本： 有些th粉真的是无下限加阴魂不散，天天骚扰攻击当，真的懂音乐吗？
+真实： 厌恶
+预测： 厌恶
+====================================================================================================
+====================================================================================================
+multi_gpu_transformers_ckpt_path
+文本： 有些th粉真的是无下限加阴魂不散，天天骚扰攻击当，真的懂音乐吗？
+真实： 厌恶
+预测： 厌恶
+====================================================================================================
+```
+
 # 补充
 
 - 不难发现大多情况下基本的流程是差不多的。
@@ -594,6 +654,17 @@ trainer.evaluate()
 - 需要注意到底是不同GPU处理相同数据还是不同数据，比如deepspeed、accelerate。
 - 以上代码可能只是一个基本的使用，更高级的使用可能还需要自行去查阅相关的资料。
 - 还需要注意模型是怎么保存和加载的，一般情况下我们可以使用torch自带的方式来保存和加载模型，但是对于deepspeed中使用的ZeRO3，因为它将模型参数分块到不同的GPU上，因此要使用其带的保存和加载的方法。同时分布式测试的时候，要主要加载模型的时候先用分布式库封装一下（因为我们保存模型的时候是保存了封装之后的模型）。
+- 具体占用显存、训练速度、模型性能由于不同参数之间的差异可能稍有出入。
+- 如果我们要单独包模型拿出来进行正常的使用，可能需要对模型的参数名进行处理，参考test.py和predict.py里面：
+
+```python
+def mapping(checkpoint):
+    old_state = torch.load(checkpoint)
+    new_state = {}
+    for k,v in old_state.items():
+        new_state[k.replace("module.", "")] = v
+    return new_state
+```
 
 # 参考
 

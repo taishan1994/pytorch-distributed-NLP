@@ -358,7 +358,7 @@ def main_worker():
                       criterion,
                       optimizer)
 
-    # trainer.train(train_loader, dev_loader, train_sampler)
+    trainer.train(train_loader, dev_loader, train_sampler)
 
     labels = list(label2id.keys())
     config = BertConfig.from_pretrained(args.model_path, num_labels=6)
