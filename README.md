@@ -19,6 +19,9 @@ pytorch单机多卡分布式训练-中文文本分类。一直想尝试来着，
 | accelerate                   | 1.3667     |
 | transformers-Trainer         | 0.4900     |
 
+其它的一些分布式框架：
+- lightning-fabric
+
 # 单GPU训练
 
 **运行**：```python single-gpu-cls.py```
